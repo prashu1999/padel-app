@@ -1,8 +1,8 @@
-/* Padel Shuffle is intentionally dependency-free for reliable static hosting. */
+/* Padelé is intentionally dependency-free for reliable static hosting. */
 (function () {
   'use strict';
 
-  var STORAGE_KEY = 'padel-shuffle-session-v2';
+  var STORAGE_KEY = 'padele-session-v1';
   var app = document.getElementById('app');
   var state = loadState();
 
@@ -80,86 +80,52 @@
     return copy;
   }
 
-  function teamOptions(group) {
-    return [
-      [[group[0], group[1]], [group[2], group[3]]],
-      [[group[0], group[2]], [group[1], group[3]]],
-      [[group[0], group[3]], [group[1], group[2]]]
-    ];
-  }
+  function findAdaptiveUniqueTeams(playerIds, teamCount) {
+    var solution = null;
 
-  function pairingPenalty(pairing) {
-    return teammateCount(pairing[0][0], pairing[0][1]) + teammateCount(pairing[1][0], pairing[1][1]);
-  }
-
-  function findUniqueTeams(playerIds) {
-    var teams = [];
-
-    function matchRemaining(remaining) {
-      if (!remaining.length) return true;
-      var first = remaining[0];
-      var partners = shuffle(remaining.slice(1).filter(function (candidate) {
-        return teammateCount(first, candidate) === 0;
-      }));
-      for (var partnerIndex = 0; partnerIndex < partners.length; partnerIndex += 1) {
-        var partner = partners[partnerIndex];
-        var nextRemaining = remaining.filter(function (id) { return id !== first && id !== partner; });
-        teams.push([first, partner]);
-        if (matchRemaining(nextRemaining)) return true;
+    function search(available, teams) {
+      if (teams.length === teamCount) {
+        solution = teams.slice();
+        return true;
+      }
+      if (available.length < (teamCount - teams.length) * 2) return false;
+      var options = [];
+      for (var first = 0; first < available.length - 1; first += 1) {
+        for (var second = first + 1; second < available.length; second += 1) {
+          if (teammateCount(available[first], available[second]) === 0) {
+            options.push({
+              team: [available[first], available[second]],
+              score: (state.playCounts[available[first]] || 0) + (state.playCounts[available[second]] || 0) + Math.random() * .35
+            });
+          }
+        }
+      }
+      options.sort(function (left, right) { return left.score - right.score; });
+      for (var optionIndex = 0; optionIndex < options.length; optionIndex += 1) {
+        var team = options[optionIndex].team;
+        var remaining = available.filter(function (id) { return id !== team[0] && id !== team[1]; });
+        teams.push(team);
+        if (search(remaining, teams)) return true;
         teams.pop();
       }
       return false;
     }
 
-    return matchRemaining(shuffle(playerIds)) ? shuffle(teams) : null;
+    return search(shuffle(playerIds), []) ? solution : null;
   }
 
-  function generateDoublesMatches(playerIds) {
-    var teams = findUniqueTeams(playerIds);
+  function generateAdaptiveMatches(playerIds, courtCount) {
+    var teams = findAdaptiveUniqueTeams(playerIds, courtCount * 2);
     if (!teams) return null;
-    return teams.map(function (team, index) {
-      if (index % 2) return null;
-      return { court: index / 2 + 1, teamA: team, teamB: teams[index + 1], waiting: [], score: emptyScore() };
-    }).filter(Boolean);
-  }
-
-  function chooseRotationPlayers(playerIds) {
-    var best = null;
-    for (var first = 0; first < playerIds.length - 3; first += 1) {
-      for (var second = first + 1; second < playerIds.length - 2; second += 1) {
-        for (var third = second + 1; third < playerIds.length - 1; third += 1) {
-          for (var fourth = third + 1; fourth < playerIds.length; fourth += 1) {
-            var selected = [playerIds[first], playerIds[second], playerIds[third], playerIds[fourth]];
-            var playTotal = selected.reduce(function (sum, id) { return sum + (state.playCounts[id] || 0); }, 0);
-            var spread = selected.map(function (id) { return state.playCounts[id] || 0; });
-            var fairnessPenalty = playTotal * 20 + (Math.max.apply(null, spread) - Math.min.apply(null, spread)) * 2;
-            var options = teamOptions(selected).filter(function (option) { return pairingPenalty(option) === 0; });
-            options.forEach(function (pairing) {
-              if (!best || fairnessPenalty < best.penalty || (fairnessPenalty === best.penalty && Math.random() < 0.25)) {
-                best = { penalty: fairnessPenalty, selected: selected, pairing: pairing };
-              }
-            });
-          }
-        }
-      }
-    }
-    return best;
-  }
-
-  function generateRotationMatch() {
-    var playerIds = state.players.map(function (player) { return player.id; });
-    var choice = chooseRotationPlayers(playerIds);
-    if (!choice) return null;
-    choice.selected.forEach(function (id) {
+    var playing = teams.reduce(function (ids, team) { return ids.concat(team); }, []);
+    var waiting = playerIds.filter(function (id) { return playing.indexOf(id) === -1; });
+    playing.forEach(function (id) {
       state.playCounts[id] = (state.playCounts[id] || 0) + 1;
     });
-    return [{
-      court: 1,
-      teamA: choice.pairing[0],
-      teamB: choice.pairing[1],
-      waiting: playerIds.filter(function (id) { return choice.selected.indexOf(id) === -1; }),
-      score: emptyScore()
-    }];
+    return teams.map(function (team, index) {
+      if (index % 2) return null;
+      return { court: index / 2 + 1, teamA: team, teamB: teams[index + 1], waiting: waiting, score: emptyScore() };
+    }).filter(Boolean);
   }
 
   function recordTeamHistory(matches) {
@@ -173,9 +139,7 @@
 
   function createRound() {
     var playerIds = state.players.map(function (player) { return player.id; });
-    var matches = state.mode === 'rotation'
-      ? generateRotationMatch()
-      : generateDoublesMatches(playerIds);
+    var matches = generateAdaptiveMatches(playerIds, state.courts);
     if (!matches) {
       state.matches = [];
       state.finishedNoPairs = true;
@@ -289,45 +253,79 @@
     });
   }
 
+  function sessionPlan(playerCount, courts) {
+    if (!playerCount) return { heading: 'Build your game plan', detail: 'Add up to 20 players to see your unique-team schedule.' };
+    if (playerCount > 20) return { heading: '20-player limit', detail: 'Remove ' + (playerCount - 20) + ' player' + (playerCount - 20 === 1 ? '' : 's') + ' to continue.' };
+    if (playerCount < 4) return { heading: '4 players needed', detail: 'Add ' + (4 - playerCount) + ' more player' + (playerCount === 3 ? '' : 's') + ' to start.' };
+    var activePlayers = courts * 4;
+    var waitingPlayers = playerCount - activePlayers;
+    var rounds = Math.floor((playerCount * (playerCount - 1)) / (4 * courts));
+    var courtGames = rounds * courts;
+    return {
+      heading: rounds + ' unique shuffle round' + (rounds === 1 ? '' : 's') + ' available',
+      detail: courtGames + ' court game' + (courtGames === 1 ? '' : 's') + ' before a teammate would repeat. ' + activePlayers + ' play' + (waitingPlayers ? ', ' + waitingPlayers + ' wait' : '') + ' each round.'
+    };
+  }
+
+  function renderCourtAssignments() {
+    var assignments = state.matches.map(function (match) {
+      var playing = match.teamA.concat(match.teamB).map(playerName).map(escapeHtml).join(' · ');
+      return '<div class="assignment"><span class="assignment-court">COURT ' + match.court + '</span><span class="assignment-players">' + playing + '</span></div>';
+    }).join('');
+    var waiting = state.matches[0].waiting;
+    var waitingPanel = waiting.length ? '<div class="assignment-waiting"><strong>WAITING THIS ROUND</strong><span>' + waiting.map(playerName).map(escapeHtml).join(' · ') + '</span></div>' : '';
+    return '<section class="assignments-card"><div class="assignments-heading"><div><span class="eyebrow">WHO PLAYS WHERE</span><h2>Tonight’s courts</h2></div><span class="assignment-count">' + state.matches.length + ' active</span></div><div class="assignments-grid">' + assignments + '</div>' + waitingPanel + '</section>';
+  }
+
   function renderSetup(message) {
     var existingNames = state && state.players ? state.players.map(function (player) { return player.name; }).join('\n') : '';
     app.innerHTML = '' +
-      '<section class="topbar"><div><h1 class="brand">Padel Shuffle</h1><p class="round-label">Teams, score, repeat.</p></div></section>' +
+      '<section class="topbar topbar--setup"><div><h1 class="brand">Padelé</h1><p class="round-label">Your court, shuffled fairly.</p></div></section>' +
       '<section class="card setup-card">' +
-        '<h2 class="section-title">Set up your session</h2>' +
-        '<p class="helper">Enter one player per line. Your session stays on this device.</p>' +
+        '<span class="eyebrow">SESSION SETUP</span><h2 class="section-title">Ready for the court?</h2>' +
+        '<p class="helper">Add 4 to 20 players. Padelé assigns courts automatically and rotates anyone waiting into the next shuffle.</p>' +
         (message ? '<p class="notice">' + escapeHtml(message) + '</p>' : '') +
         '<form id="setup-form">' +
-          '<label for="player-names">Player names</label>' +
-          '<textarea id="player-names" required placeholder="Enter Player Name Here">' + escapeHtml(existingNames) + '</textarea>' +
+          '<label class="player-label" for="player-names"><span>Player names</span><span id="player-count" class="player-count">0 / 20</span></label>' +
+          '<textarea id="player-names" required placeholder="Enter Player Names Here">' + escapeHtml(existingNames) + '</textarea>' +
           '<div class="field-row">' +
-            '<div><label for="court-count">Courts</label><select id="court-count"><option value="1">1 court</option><option value="2">2 courts</option><option value="3">3 courts</option><option value="4">4 courts</option></select></div>' +
-            '<div><label for="game-mode">Game mode</label><select id="game-mode"><option value="doubles">4 per court</option><option value="rotation">8-player rotation</option></select></div>' +
+            '<div><label for="court-count">Courts</label><select id="court-count"><option value="1">1 court</option><option value="2">2 courts</option><option value="3">3 courts</option><option value="4">4 courts</option><option value="5">5 courts</option></select></div>' +
+            '<div class="auto-format"><span>FORMAT</span><strong>Auto shuffle</strong><small>4 players per court</small></div>' +
           '</div>' +
-          '<p class="helper" id="mode-help">Doubles needs exactly 4 players for each court.</p>' +
+          '<p class="helper" id="mode-help">Add at least 4 players to start.</p>' +
+          '<section class="session-plan" aria-live="polite"><span class="plan-icon">⌁</span><div><strong id="plan-heading">Build your game plan</strong><span id="plan-detail">Add up to 20 players to see your unique-team schedule.</span></div></section>' +
           '<button class="button button--full" type="submit">🔀 Start &amp; Shuffle</button>' +
         '</form>' +
       '</section>';
     var form = document.getElementById('setup-form');
-    var mode = document.getElementById('game-mode');
     var courts = document.getElementById('court-count');
+    var playerNames = document.getElementById('player-names');
     if (state) {
       courts.value = String(state.courts || 1);
-      mode.value = state.mode || 'doubles';
     }
-    function updateModeHelp() {
+    function updateSetupSummary() {
       var help = document.getElementById('mode-help');
-      if (mode.value === 'rotation') {
-        courts.value = '1';
-        courts.disabled = true;
-        help.textContent = 'Rotation mode uses exactly 8 players on 1 court: 4 play and 4 wait.';
-      } else {
-        courts.disabled = false;
-        help.textContent = 'Doubles needs exactly 4 players for each court.';
+      var playerCount = playerNames.value.split(/\r?\n/).map(function (name) { return name.trim(); }).filter(Boolean).length;
+      var maxCourts = Math.min(5, Math.floor(playerCount / 4));
+      for (var optionIndex = 0; optionIndex < courts.options.length; optionIndex += 1) {
+        courts.options[optionIndex].disabled = playerCount >= 4 && Number(courts.options[optionIndex].value) > maxCourts;
       }
+      if (playerCount >= 4 && Number(courts.value) > maxCourts) courts.value = String(maxCourts);
+      var activePlayers = Math.min(playerCount, Number(courts.value) * 4);
+      var waitingPlayers = Math.max(0, playerCount - activePlayers);
+      help.textContent = playerCount < 4
+        ? 'Add at least ' + (4 - playerCount) + ' more player' + (playerCount === 3 ? '' : 's') + ' to start.'
+        : activePlayers + ' will play this round' + (waitingPlayers ? '; ' + waitingPlayers + ' will wait and rotate in next game.' : '.');
+      var plan = sessionPlan(playerCount, Number(courts.value));
+      var countLabel = document.getElementById('player-count');
+      countLabel.textContent = playerCount + ' / 20';
+      countLabel.classList.toggle('player-count--limit', playerCount > 20);
+      document.getElementById('plan-heading').textContent = plan.heading;
+      document.getElementById('plan-detail').textContent = plan.detail;
     }
-    mode.addEventListener('change', updateModeHelp);
-    updateModeHelp();
+    courts.addEventListener('change', updateSetupSummary);
+    playerNames.addEventListener('input', updateSetupSummary);
+    updateSetupSummary();
     form.addEventListener('submit', startSession);
   }
 
@@ -335,7 +333,7 @@
     var score = match.score;
     var isTie = score.pointsA === 3 && score.pointsB === 3;
     var winnerText = score.complete ? '🏆 TEAM ' + (score.winner === 'a' ? 'A' : 'B') + ' WINS' : '';
-    var waiting = match.waiting.length
+    var waiting = match.court === 1 && match.waiting.length
       ? '<div class="waiting"><span class="waiting-title">WAITING</span><ul class="waiting-list">' + match.waiting.map(function (id) { return '<li>' + escapeHtml(playerName(id)) + '</li>'; }).join('') + '</ul></div>'
       : '';
     return '<article class="card court-card" data-court="' + match.court + '">' +
@@ -365,15 +363,16 @@
   function renderSession(message) {
     if (state.finishedNoPairs) {
       app.innerHTML = '' +
-        '<section class="topbar"><div><h1 class="brand">Padel Shuffle</h1><p class="round-label">Session complete</p></div><button class="button button--quiet" data-action="end">End session</button></section>' +
+        '<section class="topbar"><div><h1 class="brand">Padelé</h1><p class="round-label">Session complete</p></div><button class="button button--quiet" data-action="end">End session</button></section>' +
         '<section class="card"><h2 class="section-title">All unique teammate pairs have played</h2><p class="helper">No teammate pair will repeat. Start a new session when you are ready to play together again.</p></section>' +
         '<section class="card leaderboard-card"><h2>Leaderboard</h2><div class="table-wrap"><table><thead><tr><th>Player</th><th>Games</th><th>Wins</th><th>Losses</th><th>Sets</th></tr></thead><tbody>' + leaderboardRows() + '</tbody></table></div></section>';
       return;
     }
     var allComplete = state.matches.every(matchIsComplete);
     app.innerHTML = '' +
-      '<section class="topbar"><div><h1 class="brand">Padel Shuffle</h1><p class="round-label">Round ' + state.round + ' · ' + (state.mode === 'rotation' ? '8-player rotation' : state.courts + ' court' + (state.courts > 1 ? 's' : '')) + '</p></div><button class="button button--quiet" data-action="end">End session</button></section>' +
+      '<section class="topbar"><div><h1 class="brand">Padelé</h1><p class="round-label">Round ' + state.round + ' · ' + state.courts + ' court' + (state.courts > 1 ? 's' : '') + ' · ' + state.players.length + ' players</p></div><button class="button button--quiet" data-action="end">End session</button></section>' +
       (message ? '<p class="notice">' + escapeHtml(message) + '</p>' : '') +
+      renderCourtAssignments() +
       '<section class="matches">' + state.matches.map(renderMatch).join('') + '</section>' +
       '<button class="button button--full button--next" data-action="next" ' + (allComplete ? '' : 'disabled') + '>➜ NEXT GAME</button>' +
       (!allComplete ? '<p class="helper">Finish every court (first to 2 sets) to start the next game.</p>' : '<p class="helper">Results will be saved to the leaderboard and the next round will be shuffled.</p>') +
@@ -389,25 +388,27 @@
     event.preventDefault();
     var rawNames = document.getElementById('player-names').value.split(/\r?\n/).map(function (name) { return name.trim(); }).filter(Boolean);
     var courts = Number(document.getElementById('court-count').value);
-    var mode = document.getElementById('game-mode').value;
     var lowerNames = rawNames.map(function (name) { return name.toLocaleLowerCase(); });
     if (new Set(lowerNames).size !== rawNames.length) {
       renderSetup('Please use a unique name for each player.');
       return;
     }
-    if (mode === 'rotation' && (courts !== 1 || rawNames.length !== 8)) {
-      renderSetup('8-player rotation needs exactly 8 players and 1 court.');
+    if (rawNames.length > 20) {
+      renderSetup('A session can have up to 20 players.');
       return;
     }
-    if (mode === 'doubles' && rawNames.length !== courts * 4) {
-      renderSetup('Doubles needs exactly ' + (courts * 4) + ' players for ' + courts + ' court' + (courts > 1 ? 's' : '') + '.');
+    if (rawNames.length < 4) {
+      renderSetup('At least 4 players are needed to start a game.');
+      return;
+    }
+    if (rawNames.length < courts * 4) {
+      renderSetup(courts + ' court' + (courts > 1 ? 's' : '') + ' need' + (courts === 1 ? 's' : '') + ' at least ' + (courts * 4) + ' players.');
       return;
     }
     state = {
       version: 1,
       players: rawNames.map(function (name, index) { return { id: uid(index), name: name }; }),
       courts: courts,
-      mode: mode,
       round: 1,
       teammates: {},
       playCounts: {},

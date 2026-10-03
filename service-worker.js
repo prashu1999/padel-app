@@ -1,9 +1,10 @@
-const CACHE_NAME = 'padel-shuffle-v6';
+const CACHE_NAME = 'padele-v1';
 const APP_SHELL = [
   './',
   './index.html',
   './styles.css',
   './app.js',
+  './assets-padel-court.png',
   './manifest.webmanifest',
   './icons/padel-icon.svg',
   './icons/icon-192.png',

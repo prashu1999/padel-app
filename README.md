@@ -1,6 +1,8 @@
-# Padel Shuffle
+# Padelé
 
 A simple, dependency-free, mobile-first PWA for shuffling padel teams, scoring first-to-two-set games, and tracking a local session leaderboard.
+
+Supports up to 20 players across up to 5 courts. The setup screen shows how many unique rounds and court games can be played before a teammate pair would repeat.
 
 ## Run locally
 
@@ -25,7 +27,13 @@ Deploy over HTTPS for PWA installation and offline caching. The service worker u
 
 ## iPhone installation
 
-Open the deployed HTTPS site in Safari, tap **Share**, then choose **Add to Home Screen**. Session data is stored only in that browser using localStorage; it is not synced and no account is required.
+You cannot install the app directly from a Mac folder; it needs a public HTTPS link. The fastest route is **Netlify Drop**:
+
+1. On your Mac, open [Netlify Drop](https://app.netlify.com/drop) and drag in the `padel-shuffle` folder (or the provided ZIP).
+2. Copy the generated `https://…netlify.app` link and open it in **Safari** on your iPhone.
+3. Tap **Share** → **Add to Home Screen** → **Add**.
+
+The app then opens like a normal iPhone app. Session data is stored only in that browser using localStorage; it is not synced and no account is required.
 
 ## Scoring notes
 
@@ -34,4 +42,4 @@ Open the deployed HTTPS site in Safari, tap **Share**, then choose **Add to Home
 - The first team to win two sets wins one **game**. At 1–1, the third set is the decider.
 - Finish all active courts before pressing **Next Game**; the completed game is then recorded in the leaderboard.
 - Teammate pairs never repeat within a session. When every valid unique teammate pairing has been used, the session ends and shows the final leaderboard.
-- The shuffle records teammate pairings and favors new teammate combinations. In 8-player rotation mode it also favors players with fewer appearances in the current session.
+- Padelé automatically assigns four players to each active court and rotates any remaining players into later rounds, while never repeating a teammate pair.
