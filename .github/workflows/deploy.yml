@@ -23,6 +23,10 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
 
+    defaults:
+      run:
+        working-directory: ./padel-shuffle
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -47,7 +51,7 @@ jobs:
       - name: Upload website
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./dist
+          path: ./padel-shuffle/dist
 
       - name: Deploy website
         id: deployment
