@@ -12,6 +12,7 @@ The offline app is fully usable without an account, network, or Supabase project
 - **Offline quick sessions:** `0 → 15 → 30 → 40`, deuce and advantage award one set; first to two sets wins the game, so 1–1 has a deciding set.
 - **Online tournaments:** use the exact same quick-session score as Offline: a tennis point sequence wins one set; first to two sets wins the game; 1–1 has a deciding set.
 - Online hosts set a venue, start time and end time. Their room is hidden from the dashboard two hours after its scheduled end, but its results are retained.
+- Online includes RSVP availability, live court/waiting assignments, host-only score undo, shareable room invitations, a live leaderboard, player results, archive/restore, and host controls for guest removal and room details.
 - A teammate pairing is used once only. Padelé will not create a later round that repeats one; it ends the session once a full fresh-pair round cannot be made.
 - Four players are assigned per active court. Extra players rotate out based on their number of appearances, so a 7-player/1-court session assigns four and rotates three.
 - Opponent history is retained and used as a preference when pairing courts, reducing repeat matchups without relaxing the teammate rule.
@@ -50,7 +51,7 @@ This signs in, measures each operation, creates a clearly named audit tournament
 ## Configure Online mode (Supabase)
 
 1. Create a Supabase project.
-2. Run the migrations in order in the Supabase SQL Editor: [`001_padele.sql`](supabase/migrations/001_padele.sql), [`002_repair_online_connection.sql`](supabase/migrations/002_repair_online_connection.sql), [`003_performance_fixes.sql`](supabase/migrations/003_performance_fixes.sql), and [`004_tournament_schedule_and_host_controls.sql`](supabase/migrations/004_tournament_schedule_and_host_controls.sql). The final migration adds scheduling and the host-only delete action.
+2. Run the migrations in order in the Supabase SQL Editor: [`001_padele.sql`](supabase/migrations/001_padele.sql), [`002_repair_online_connection.sql`](supabase/migrations/002_repair_online_connection.sql), [`003_performance_fixes.sql`](supabase/migrations/003_performance_fixes.sql), [`004_tournament_schedule_and_host_controls.sql`](supabase/migrations/004_tournament_schedule_and_host_controls.sql), and [`005_online_tournament_experience.sql`](supabase/migrations/005_online_tournament_experience.sql). The final migration adds RSVP, archive/restore, host controls, and safe score correction.
 3. In the site host, set only these public build variables:
 
    ```sh

@@ -12,10 +12,12 @@ import { cloudConfigured, supabase } from './lib/supabase.js';
 import { getCurrentUser, getProfile, resetPasswordForEmail, signIn, signOut, signUp } from './services/auth.js';
 import { friendlyServiceError } from './services/query.js';
 import {
-  addGuestPlayer, createTournament, deleteTournament, joinTournament, listMyTournaments, loadTournament,
-  loadPairingHistory, recordPoint, startRound
+  addGuestPlayer, createTournament, deleteTournament, finishTournament, joinTournament, listMyTournaments,
+  loadMyProfileStats, loadPairingHistory, loadTournament, recordPoint, removeGuestPlayer,
+  setMyAvailability, setTournamentArchived, startRound, undoLastPoint, updateTournamentDetails
 } from './services/tournaments.js';
 import { subscribeToTournament } from './services/realtime.js';
+import { playerProfileStats, tournamentLeaderboard } from './tournament-stats.js';
 
 const app = document.querySelector('#app');
 let unsubscribeTournament = null;
@@ -30,7 +32,10 @@ const state = {
     loading: false,
     user: null,
     profile: null,
+    profileStats: null,
     authMode: 'sign-in',
+    hubView: 'dashboard',
+    roomView: 'main',
     tournaments: [],
     selected: null
   }
@@ -60,6 +65,13 @@ function setNotice(message, kind = 'info') {
 function formatDateTime(value) {
   if (!value) return 'Time not set';
   return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(value));
+}
+
+function dateTimeInputValue(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  const offset = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
 }
 
 function isHiddenFromHostDashboard(tournament) {
@@ -258,16 +270,37 @@ function renderAuth() {
 }
 
 function renderTournamentHub() {
+  if (state.online.hubView === 'create') return renderCreateTournament();
+  if (state.online.hubView === 'join') return renderJoinTournament();
+  if (state.online.hubView === 'profile') return renderOnlineProfile();
   scheduleDashboardExpiry();
   const currentUserId = state.online.user?.id;
-  const created = state.online.tournaments.filter((tournament) => tournament.organizer_id === currentUserId && !isHiddenFromHostDashboard(tournament));
+  const created = state.online.tournaments.filter((tournament) => tournament.organizer_id === currentUserId && tournament.status !== 'archived' && !isHiddenFromHostDashboard(tournament));
   const joined = state.online.tournaments.filter((tournament) => tournament.organizer_id !== currentUserId);
   const tournamentRow = (tournament) => `<button class="tournament-row" data-action="open-tournament" data-tournament="${tournament.id}"><span><b>${escapeHtml(tournament.name)}</b><small>${formatDateTime(tournament.starts_at)} · ${escapeHtml(tournament.venue || 'Venue to be confirmed')}</small></span><strong>${escapeHtml(tournament.code)} →</strong></button>`;
-  return `<section class="card hub-card"><div class="section-heading"><div><p class="eyebrow">ONLINE MODE</p><h1 class="page-title">Your courts</h1></div><button class="text-button" data-action="sign-out">Sign out</button></div>
-    <div class="online-actions"><form class="create-tournament" data-form="create-tournament"><h2>Create a tournament</h2><label>Event name<input name="name" maxlength="80" required placeholder="Friday social" /></label><div class="field-grid"><label>Venue <input name="venue" maxlength="120" required placeholder="Club or court name" /></label><label>Courts<select name="courts">${[1, 2, 3, 4, 5].map((number) => `<option value="${number}">${number}</option>`).join('')}</select></label></div><div class="field-grid"><label>Start time<input name="startsAt" type="datetime-local" required /></label><label>End time<input name="endsAt" type="datetime-local" required /></label></div><label>Scoring control<select name="scoringPermission"><option value="all_players">Any joined player</option><option value="organizers">Organizers only</option></select></label><button class="button button--primary" type="submit">Create room</button></form><form class="join-tournament" data-form="join-tournament"><h2>Join a room</h2><p>Enter the six-character code from your host.</p><div><input name="code" required maxlength="6" pattern="[A-Za-z0-9]{6}" placeholder="6-character code" autocomplete="off" /><button class="button" type="submit">Join</button></div></form></div>
-    <section class="tournament-list"><div class="section-heading"><h2>Created by you</h2><span class="list-count">${created.length}</span></div>${created.length ? created.map(tournamentRow).join('') : '<p class="empty">Your scheduled rooms appear here. They hide two hours after the end time, while results stay safe.</p>'}</section>
-    ${joined.length ? `<section class="tournament-list tournament-list--joined"><div class="section-heading"><h2>Joined by you</h2><span class="list-count">${joined.length}</span></div>${joined.map(tournamentRow).join('')}</section>` : ''}
+  const stats = state.online.profileStats || { played: 0, wins: 0, winRate: 0 };
+  return `<section class="online-dashboard"><section class="online-dashboard__intro"><div><p class="eyebrow eyebrow--light">ONLINE MODE</p><h1>Your padel,<br><em>all together.</em></h1><p>Create a room for your group or join a host using their room code.</p></div><button class="nav-pill" data-action="sign-out">Sign out</button></section>
+    <div class="mode-grid online-choice-grid"><button class="mode-card mode-card--create" data-action="online-create"><span class="mode-card__icon">+</span><span class="mode-card__meta">HOST A SESSION</span><strong>Create tournament</strong><small>Set the venue, time and courts for your group.</small><span class="mode-card__arrow">→</span></button><button class="mode-card mode-card--join" data-action="online-join"><span class="mode-card__icon">⌁</span><span class="mode-card__meta">GOT A CODE?</span><strong>Join a tournament</strong><small>Enter a host’s six-character room code.</small><span class="mode-card__arrow">→</span></button></div>
+    <button class="profile-snapshot" data-action="online-profile"><span><b>${escapeHtml(state.online.profile?.display_name || 'My profile')}</b><small>${stats.played} matches · ${stats.wins} wins · ${stats.winRate}% win rate</small></span><strong>View profile →</strong></button>
+    <section class="card tournament-list"><div class="section-heading"><div><p class="eyebrow">YOUR ROOMS</p><h2>Created by you</h2></div><span class="list-count">${created.length}</span></div>${created.length ? created.map(tournamentRow).join('') : '<p class="empty">Your scheduled rooms appear here. They hide two hours after the end time, while results stay safe.</p>'}</section>
+    ${joined.length ? `<section class="card tournament-list tournament-list--joined"><div class="section-heading"><div><p class="eyebrow">YOUR INVITES</p><h2>Joined by you</h2></div><span class="list-count">${joined.length}</span></div>${joined.map(tournamentRow).join('')}</section>` : ''}
   </section>`;
+}
+
+function renderOnlineProfile() {
+  const currentUserId = state.online.user?.id;
+  const archived = state.online.tournaments.filter((tournament) => tournament.organizer_id === currentUserId && (tournament.status === 'archived' || isHiddenFromHostDashboard(tournament)));
+  const stats = state.online.profileStats || { played: 0, wins: 0, losses: 0, sets: 0, winRate: 0 };
+  const row = (tournament) => `<button class="tournament-row" data-action="open-tournament" data-tournament="${tournament.id}"><span><b>${escapeHtml(tournament.name)}</b><small>${formatDateTime(tournament.starts_at)} · ${escapeHtml(tournament.status === 'archived' ? 'Archived by host' : 'Auto-hidden')}</small></span><strong>View →</strong></button>`;
+  return `<section class="card hub-card online-flow"><button class="text-button online-flow__back" data-action="online-dashboard">← Back to your courts</button><p class="eyebrow">PLAYER PROFILE</p><h1 class="page-title">${escapeHtml(state.online.profile?.display_name || 'Your')}<br><em>results.</em></h1><div class="profile-stat-grid"><div><b>${stats.played}</b><span>Played</span></div><div><b>${stats.wins}</b><span>Won</span></div><div><b>${stats.losses}</b><span>Lost</span></div><div><b>${stats.sets}</b><span>Sets won</span></div><div><b>${stats.winRate}%</b><span>Win rate</span></div></div><section class="tournament-list archive-list"><div class="section-heading"><div><p class="eyebrow">PAST TOURNAMENTS</p><h2>Archive</h2></div><span class="list-count">${archived.length}</span></div>${archived.length ? archived.map(row).join('') : '<p class="empty">Finished and archived tournaments will be kept here for results and future edits.</p>'}</section></section>`;
+}
+
+function renderCreateTournament() {
+  return `<section class="card hub-card online-flow"><button class="text-button online-flow__back" data-action="online-dashboard">← Back to your courts</button><p class="eyebrow">HOST A SESSION</p><h1 class="page-title">Create a<br><em>tournament.</em></h1><p class="helper">Schedule the session now. The room will hide from your dashboard two hours after the end time, but its results remain saved.</p><form class="create-tournament create-tournament--screen" data-form="create-tournament"><label>Event name<input name="name" maxlength="80" required placeholder="Friday social" /></label><div class="field-grid"><label>Venue <input name="venue" maxlength="120" required placeholder="Club or court name" /></label><label>Courts<select name="courts">${[1, 2, 3, 4, 5].map((number) => `<option value="${number}">${number}</option>`).join('')}</select></label></div><div class="field-grid"><label>Start time<input name="startsAt" type="datetime-local" required /></label><label>End time<input name="endsAt" type="datetime-local" required /></label></div><label>Scoring control<select name="scoringPermission"><option value="all_players">Any joined player</option><option value="organizers">Organizers only</option></select></label><button class="button button--primary button--large" type="submit">Create room <span>→</span></button></form></section>`;
+}
+
+function renderJoinTournament() {
+  return `<section class="card hub-card online-flow"><button class="text-button online-flow__back" data-action="online-dashboard">← Back to your courts</button><p class="eyebrow">GOT A ROOM CODE?</p><h1 class="page-title">Join the<br><em>rally.</em></h1><p class="helper">Ask your host for their six-character room code. You will see the live courts and scores as soon as you join.</p><form class="join-tournament join-tournament--screen" data-form="join-tournament"><label>Room code<input name="code" required maxlength="6" pattern="[A-Za-z0-9]{6}" placeholder="ABC123" autocomplete="off" /></label><button class="button button--primary button--large" type="submit">Join tournament <span>→</span></button></form></section>`;
 }
 
 function onlinePlayerName(players, id) {
@@ -302,24 +335,42 @@ function onlineOpponentCounts(matches) {
 function renderOnlineTournament() {
   const selected = state.online.selected;
   if (!selected) return '';
-  const { tournament, players, rounds, matches } = selected;
+  const { tournament, players, rounds, matches, completedMatches = [] } = selected;
+  if (state.online.roomView === 'edit') return renderEditTournament(tournament);
   const activeMatches = matches.filter((match) => match.status === 'active');
   const isOrganizer = tournament.organizer_id === state.online.user?.id;
+  const currentPlayer = players.find((player) => player.user_id === state.online.user?.id);
+  const availablePlayers = players.filter((player) => player.availability !== 'unavailable');
+  const latestRound = rounds[0];
+  const waitingNames = (latestRound?.waiting_player_ids || []).map((id) => onlinePlayerName(players, id));
+  const leaderboard = tournamentLeaderboard(players, completedMatches);
+  const playerChip = (player) => `<span class="player-chip ${player.availability === 'unavailable' ? 'player-chip--away' : ''}">${escapeHtml(player.display_name)}${player.role === 'organizer' ? ' <b>host</b>' : ''}<small>${player.availability === 'unavailable' ? 'away' : 'going'}</small>${isOrganizer && player.is_guest && tournament.status === 'lobby' ? `<button class="chip-remove" data-action="remove-guest" data-player="${player.id}" aria-label="Remove ${escapeHtml(player.display_name)}">×</button>` : ''}</span>`;
+  const actionButtons = isOrganizer ? `<div class="room-actions"><button class="room-action" data-action="share-room">Share room</button><button class="room-action" data-action="edit-tournament">Edit details</button>${tournament.status === 'archived' ? '<button class="room-action" data-action="restore-tournament">Restore</button>' : `<button class="room-action" data-action="archive-tournament">Archive</button>`}${!activeMatches.length && tournament.status !== 'finished' && tournament.status !== 'archived' ? '<button class="room-action" data-action="finish-tournament">Finish tournament</button>' : ''}<button class="room-delete" data-action="delete-tournament">Delete tournament</button></div>` : '<button class="room-action" data-action="share-room">Share room</button>';
   return `<section class="online-room">${header(`ROOM ${tournament.code}`)}${banner()}
-    <section class="room-hero"><p class="eyebrow eyebrow--light">${escapeHtml(tournament.status)}</p><h1>${escapeHtml(tournament.name)}</h1><div class="room-code"><span>ROOM CODE</span><b>${escapeHtml(tournament.code)}</b></div>${tournament.venue ? `<p>${escapeHtml(tournament.venue)}${tournament.starts_at ? ` · ${formatDateTime(tournament.starts_at)} – ${formatDateTime(tournament.ends_at)}` : ''}</p>` : ''}${isOrganizer ? '<button class="room-delete" data-action="delete-tournament">Delete tournament</button>' : ''}</section>
-    <section class="card room-players"><div class="section-heading"><div><p class="eyebrow">LOBBY</p><h2>${players.length} player${players.length === 1 ? '' : 's'} joined</h2></div>${isOrganizer ? '<span class="host-badge">HOST</span>' : ''}</div><div class="player-chips">${players.map((player) => `<span>${escapeHtml(player.display_name)}${player.role === 'organizer' ? ' <b>host</b>' : ''}</span>`).join('')}</div>
+    <section class="room-hero"><p class="eyebrow eyebrow--light">${escapeHtml(tournament.status)}</p><h1>${escapeHtml(tournament.name)}</h1><div class="room-code"><span>ROOM CODE</span><b>${escapeHtml(tournament.code)}</b></div>${tournament.venue ? `<p>${escapeHtml(tournament.venue)}${tournament.starts_at ? ` · ${formatDateTime(tournament.starts_at)} – ${formatDateTime(tournament.ends_at)}` : ''}</p>` : ''}${actionButtons}</section>
+    <section class="card room-players"><div class="section-heading"><div><p class="eyebrow">PLAYERS</p><h2>${availablePlayers.length} going · ${players.length} total</h2></div>${isOrganizer ? '<span class="host-badge">HOST</span>' : ''}</div><div class="player-chips">${players.map(playerChip).join('')}</div>${currentPlayer ? `<button class="availability-button" data-action="toggle-availability">${currentPlayer.availability === 'unavailable' ? 'Mark me as going' : 'I can’t make it'}</button>` : ''}
       ${isOrganizer && tournament.status === 'lobby' ? '<form class="guest-form" data-form="add-guest"><input name="guestName" required maxlength="40" placeholder="Add guest player" /><button class="button" type="submit">Add guest</button></form>' : ''}
     </section>
-    ${activeMatches.length ? `<section class="online-matches"><div class="section-heading section-heading--light"><div><p class="eyebrow eyebrow--light">LIVE ROUND</p><h2>Scores update for everyone</h2></div><span class="live-dot">LIVE</span></div>${activeMatches.map((match) => renderOnlineMatch(match, players)).join('')}</section>` : `<section class="card empty-round"><span>⌁</span><h2>${tournament.status === 'finished' ? 'Tournament finished' : 'Lobby is open'}</h2><p>${tournament.status === 'finished' ? 'Results stay available here.' : players.length < 4 ? 'Four players are needed for the first court.' : 'The host can shuffle fresh teams when everyone is in.'}</p>${isOrganizer && tournament.status !== 'finished' ? `<button class="button button--lime" data-action="online-start-round" ${players.length < 4 ? 'disabled' : ''}>Shuffle first round</button>` : ''}</section>`}
-    <section class="card past-rounds"><h2>Round history</h2><p>${rounds.length ? `${rounds.length} round${rounds.length === 1 ? '' : 's'} created` : 'No completed rounds yet.'}</p></section>
+    ${activeMatches.length ? `<section class="online-matches"><div class="section-heading section-heading--light"><div><p class="eyebrow eyebrow--light">LIVE ROUND</p><h2>Who is playing now</h2></div><span class="live-dot">LIVE</span></div><div class="online-assignments">${activeMatches.map((match) => `<div><b>COURT ${match.court}</b><span>${match.team_a_player_ids.map((id) => escapeHtml(onlinePlayerName(players, id))).join(' + ')} <i>vs</i> ${match.team_b_player_ids.map((id) => escapeHtml(onlinePlayerName(players, id))).join(' + ')}</span></div>`).join('')}</div>${waitingNames.length ? `<div class="waiting waiting--online"><b>WAITING THIS ROUND</b><span>${waitingNames.map(escapeHtml).join(' · ')}</span></div>` : ''}${activeMatches.map((match) => renderOnlineMatch(match, players, isOrganizer)).join('')}</section>` : `<section class="card empty-round"><span>⌁</span><h2>${tournament.status === 'finished' ? 'Tournament finished' : tournament.status === 'archived' ? 'Tournament archived' : 'Lobby is open'}</h2><p>${tournament.status === 'finished' ? 'Results stay available here.' : tournament.status === 'archived' ? 'Results are safe in the archive. Restore the room to make changes.' : availablePlayers.length < 4 ? 'Four available players are needed for the first court.' : 'The host can shuffle fresh teams when everyone is in.'}</p>${isOrganizer && tournament.status !== 'finished' && tournament.status !== 'archived' ? `<button class="button button--lime" data-action="online-start-round" ${availablePlayers.length < 4 ? 'disabled' : ''}>Shuffle ${rounds.length ? 'next' : 'first'} round</button>` : ''}</section>`}
+    ${renderTournamentLeaderboard(tournament, leaderboard, completedMatches, isOrganizer)}
   </section>`;
 }
 
-function renderOnlineMatch(match, players) {
+function renderTournamentLeaderboard(tournament, leaderboard, completedMatches, isOrganizer) {
+  const latest = completedMatches[0];
+  const champion = tournament.status === 'finished' ? leaderboard[0] : null;
+  return `<section class="card past-rounds results-card"><div class="section-heading"><div><p class="eyebrow">LIVE RESULTS</p><h2>${completedMatches.length ? 'Leaderboard' : 'Results will appear here'}</h2></div><span class="list-count">${completedMatches.length}</span></div>${champion?.wins ? `<div class="champion-card"><span>TOURNAMENT CHAMPION</span><b>🏆 ${escapeHtml(champion.name)}</b><small>${champion.wins} wins · ${champion.sets} sets won</small></div>` : ''}${completedMatches.length ? `<div class="table-wrap"><table><thead><tr><th>Player</th><th>W</th><th>L</th><th>Sets</th></tr></thead><tbody>${leaderboard.map((row) => `<tr><td>${escapeHtml(row.name)}</td><td>${row.wins}</td><td>${row.losses}</td><td>${row.sets}</td></tr>`).join('')}</tbody></table></div><p class="results-card__note">${latest ? `Latest result: Court ${latest.court} complete.` : ''}</p>${isOrganizer && latest ? `<button class="text-button" data-action="online-undo" data-match="${latest.id}">Undo latest completed score</button>` : ''}` : '<p>Complete a match to start the live tournament standings.</p>'}</section>`;
+}
+
+function renderEditTournament(tournament) {
+  return `<section class="card hub-card online-flow"><button class="text-button online-flow__back" data-action="room-main">← Back to room</button><p class="eyebrow">HOST CONTROLS</p><h1 class="page-title">Edit room<br><em>details.</em></h1><form class="create-tournament create-tournament--screen" data-form="edit-tournament"><label>Event name<input name="name" maxlength="80" required value="${escapeHtml(tournament.name)}" /></label><label>Venue<input name="venue" maxlength="120" required value="${escapeHtml(tournament.venue || '')}" /></label><div class="field-grid"><label>Start time<input name="startsAt" type="datetime-local" required value="${dateTimeInputValue(tournament.starts_at)}" /></label><label>End time<input name="endsAt" type="datetime-local" required value="${dateTimeInputValue(tournament.ends_at)}" /></label></div><button class="button button--primary button--large" type="submit">Save changes</button></form></section>`;
+}
+
+function renderOnlineMatch(match, players, isOrganizer) {
   // Keep shared rooms visually and functionally identical to Offline scoring.
   const score = scoreFromHistory(match.score_history || [], QUICK_SESSION_FORMAT);
   const sideNames = (ids) => ids.map((id) => escapeHtml(onlinePlayerName(players, id))).join('<br>');
-  return `<article class="match-card"><div class="match-card__header"><span>COURT ${match.court}</span><span>LIVE · FIRST TO 2 SETS</span></div><div class="match-teams"><section class="team team--a"><span>TEAM A</span><strong>${sideNames(match.team_a_player_ids)}</strong></section><div class="versus">VS</div><section class="team team--b"><span>TEAM B</span><strong>${sideNames(match.team_b_player_ids)}</strong></section></div><div class="match-score"><div><span>SETS</span><strong>${matchSetsWon(score, 'a')}</strong>${scoreSets(score, 'a')}</div><div><span>SETS</span><strong>${matchSetsWon(score, 'b')}</strong>${scoreSets(score, 'b')}</div></div><div class="point-board"><button class="score-button score-button--a" data-action="online-point" data-match="${match.id}" data-side="a" ${score.complete ? 'disabled' : ''}><span>TEAM A</span><b>${pointLabel(score, 'a')}</b><small>+ point</small></button><p class="score-status">${escapeHtml(scoreStatus(score))}</p><button class="score-button score-button--b" data-action="online-point" data-match="${match.id}" data-side="b" ${score.complete ? 'disabled' : ''}><span>TEAM B</span><b>${pointLabel(score, 'b')}</b><small>+ point</small></button></div></article>`;
+  return `<article class="match-card"><div class="match-card__header"><span>COURT ${match.court}</span><span>LIVE · FIRST TO 2 SETS</span></div><div class="match-teams"><section class="team team--a"><span>TEAM A</span><strong>${sideNames(match.team_a_player_ids)}</strong></section><div class="versus">VS</div><section class="team team--b"><span>TEAM B</span><strong>${sideNames(match.team_b_player_ids)}</strong></section></div><div class="match-score"><div><span>SETS</span><strong>${matchSetsWon(score, 'a')}</strong>${scoreSets(score, 'a')}</div><div><span>SETS</span><strong>${matchSetsWon(score, 'b')}</strong>${scoreSets(score, 'b')}</div></div><div class="point-board"><button class="score-button score-button--a" data-action="online-point" data-match="${match.id}" data-side="a" ${score.complete ? 'disabled' : ''}><span>TEAM A</span><b>${pointLabel(score, 'a')}</b><small>+ point</small></button><p class="score-status">${escapeHtml(scoreStatus(score))}</p><button class="score-button score-button--b" data-action="online-point" data-match="${match.id}" data-side="b" ${score.complete ? 'disabled' : ''}><span>TEAM B</span><b>${pointLabel(score, 'b')}</b><small>+ point</small></button></div>${isOrganizer && match.score_history?.length ? `<div class="match-card__footer"><span>Host control</span><button class="text-button text-button--compact" data-action="online-undo" data-match="${match.id}">Undo last point</button></div>` : ''}</article>`;
 }
 
 function renderOnline() {
@@ -416,7 +467,10 @@ async function bootOnline() {
   try {
     state.online.user = await getCurrentUser();
     if (state.online.user) {
-      [state.online.profile, state.online.tournaments] = await Promise.all([getProfile(state.online.user.id), listMyTournaments()]);
+      const [profile, tournaments, profileData] = await Promise.all([getProfile(state.online.user.id), listMyTournaments(), loadMyProfileStats(state.online.user.id)]);
+      state.online.profile = profile;
+      state.online.tournaments = tournaments;
+      state.online.profileStats = playerProfileStats(profileData.memberships, profileData.matches);
     }
   } catch (error) {
     // A missing session is expected on a first visit. Configuration/RLS errors are shown.
@@ -452,6 +506,24 @@ function resetOnlineRoom() {
   if (unsubscribeTournament) unsubscribeTournament();
   unsubscribeTournament = null;
   state.online.selected = null;
+  state.online.hubView = 'dashboard';
+  state.online.roomView = 'main';
+}
+
+async function refreshOnlineOverview() {
+  const [tournaments, profileData] = await Promise.all([listMyTournaments(), loadMyProfileStats(state.online.user.id)]);
+  state.online.tournaments = tournaments;
+  state.online.profileStats = playerProfileStats(profileData.memberships, profileData.matches);
+}
+
+async function shareTournament(tournament) {
+  const text = `Join my Padelé tournament “${tournament.name}”${tournament.venue ? ` at ${tournament.venue}` : ''}. Room code: ${tournament.code}${tournament.starts_at ? ` · ${formatDateTime(tournament.starts_at)}` : ''}`;
+  if (navigator.share) {
+    await navigator.share({ title: `Padelé · ${tournament.name}`, text });
+    return;
+  }
+  await navigator.clipboard?.writeText(text);
+  setNotice('Room invite copied to your clipboard.');
 }
 
 async function handleAction(action, button) {
@@ -486,16 +558,74 @@ async function handleAction(action, button) {
     }
     case 'next-round': closeOfflineRound(); render(); break;
     case 'online-home': await bootOnline(); break;
+    case 'online-create': state.online.hubView = 'create'; render(); break;
+    case 'online-join': state.online.hubView = 'join'; render(); break;
+    case 'online-dashboard': state.online.hubView = 'dashboard'; render(); break;
+    case 'online-profile': state.online.hubView = 'profile'; render(); break;
+    case 'room-main': state.online.roomView = 'main'; render(); break;
+    case 'edit-tournament': state.online.roomView = 'edit'; render(); break;
     case 'auth-mode': state.online.authMode = button.dataset.mode; render(); break;
-    case 'sign-out': await signOut(); resetOnlineRoom(); state.online.user = null; state.online.profile = null; state.online.tournaments = []; setNotice('Signed out.'); render(); break;
+    case 'sign-out': await signOut(); resetOnlineRoom(); state.online.user = null; state.online.profile = null; state.online.profileStats = null; state.online.tournaments = []; setNotice('Signed out.'); render(); break;
     case 'open-tournament': await openTournament(button.dataset.tournament); break;
     case 'delete-tournament': {
       const tournament = state.online.selected.tournament;
       if (!window.confirm(`Delete “${tournament.name}” permanently? This removes its players, rounds and scores.`)) break;
       await deleteTournament(tournament.id);
       resetOnlineRoom();
-      state.online.tournaments = await listMyTournaments();
+      await refreshOnlineOverview();
       setNotice('Tournament deleted permanently.');
+      render();
+      break;
+    }
+    case 'share-room': await shareTournament(state.online.selected.tournament); render(); break;
+    case 'archive-tournament': {
+      const tournament = state.online.selected.tournament;
+      if (!window.confirm(`Archive “${tournament.name}”? Results stay available in your profile.`)) break;
+      await setTournamentArchived(tournament.id, true);
+      resetOnlineRoom();
+      await refreshOnlineOverview();
+      setNotice('Tournament archived. You can restore it from the archive.');
+      render();
+      break;
+    }
+    case 'restore-tournament': {
+      await setTournamentArchived(state.online.selected.tournament.id, false);
+      state.online.selected = await loadTournament(state.online.selected.tournament.id);
+      await refreshOnlineOverview();
+      setNotice('Tournament restored.');
+      render();
+      break;
+    }
+    case 'finish-tournament': {
+      if (!window.confirm('Finish this tournament? Results remain available and can be archived.')) break;
+      await finishTournament(state.online.selected.tournament.id);
+      state.online.selected = await loadTournament(state.online.selected.tournament.id);
+      await refreshOnlineOverview();
+      setNotice('Tournament finished.');
+      render();
+      break;
+    }
+    case 'toggle-availability': {
+      const currentPlayer = state.online.selected.players.find((player) => player.user_id === state.online.user?.id);
+      await setMyAvailability(state.online.selected.tournament.id, currentPlayer?.availability === 'unavailable' ? 'going' : 'unavailable');
+      state.online.selected = await loadTournament(state.online.selected.tournament.id);
+      render();
+      break;
+    }
+    case 'remove-guest': {
+      const guest = state.online.selected.players.find((player) => player.id === button.dataset.player);
+      if (!window.confirm(`Remove ${guest?.display_name || 'this guest'} from the lobby?`)) break;
+      await removeGuestPlayer(state.online.selected.tournament.id, button.dataset.player);
+      state.online.selected = await loadTournament(state.online.selected.tournament.id);
+      render();
+      break;
+    }
+    case 'online-undo': {
+      const match = [...state.online.selected.matches, ...(state.online.selected.completedMatches || [])].find((item) => item.id === button.dataset.match);
+      if (!match || !window.confirm('Undo the most recent score event for this court?')) break;
+      await undoLastPoint(match);
+      state.online.selected = await loadTournament(state.online.selected.tournament.id);
+      await refreshOnlineOverview();
       render();
       break;
     }
@@ -511,9 +641,15 @@ async function handleAction(action, button) {
             score_history: result.score_history,
             score_version: result.score_version,
             status: score.complete ? 'completed' : item.status,
-            winner_side: score.complete ? score.winner : item.winner_side
+            winner_side: score.complete ? score.winner : item.winner_side,
+            score_state: score.complete ? score : item.score_state
           } : item)
         };
+        if (score.complete) {
+          const completed = state.online.selected.matches.find((item) => item.id === match.id);
+          state.online.selected.completedMatches = [{ ...completed, score_history: result.score_history, score_version: result.score_version, score_state: score, status: 'completed', winner_side: score.winner }, ...(state.online.selected.completedMatches || [])];
+          await refreshOnlineOverview();
+        }
       } catch (error) {
         if (error?.code === '40001' || /score changed/i.test(error?.message || '')) {
           state.online.selected = await loadTournament(state.online.selected.tournament.id);
@@ -525,9 +661,10 @@ async function handleAction(action, button) {
     }
     case 'online-start-round': {
       const selected = state.online.selected;
-      const ids = selected.players.map((player) => player.id);
+      const playingPlayers = selected.players.filter((player) => player.availability !== 'unavailable');
+      const ids = playingPlayers.map((player) => player.id);
       const pairingHistory = await loadPairingHistory(selected.tournament.id);
-      const result = makeRound(ids, selected.tournament.preferred_courts, onlinePairCounts(pairingHistory), onlinePlayCounts(pairingHistory, selected.players), Math.random, onlineOpponentCounts(pairingHistory));
+      const result = makeRound(ids, selected.tournament.preferred_courts, onlinePairCounts(pairingHistory), onlinePlayCounts(pairingHistory, playingPlayers), Math.random, onlineOpponentCounts(pairingHistory));
       if (!result) throw new Error('No full court can be created without repeating a teammate pair.');
       await startRound(selected.tournament.id, result.matches, result.waiting);
       state.online.selected = await loadTournament(selected.tournament.id);
@@ -600,7 +737,10 @@ app.addEventListener('submit', async (event) => {
         setNotice('Account created. Check your inbox if email confirmation is enabled.');
       } else {
         state.online.user = await signIn(email, fields.get('password'));
-        [state.online.profile, state.online.tournaments] = await Promise.all([getProfile(state.online.user.id), listMyTournaments()]);
+        const [profile, tournaments, profileData] = await Promise.all([getProfile(state.online.user.id), listMyTournaments(), loadMyProfileStats(state.online.user.id)]);
+        state.online.profile = profile;
+        state.online.tournaments = tournaments;
+        state.online.profileStats = playerProfileStats(profileData.memberships, profileData.matches);
       }
       render();
     }
@@ -610,19 +750,31 @@ app.addEventListener('submit', async (event) => {
       const endsAt = new Date(fields.get('endsAt'));
       if (Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime()) || endsAt <= startsAt) throw new Error('Choose an end time after the start time.');
       const tournament = await createTournament({ name: fields.get('name'), venue: fields.get('venue'), preferredCourts: Number(fields.get('courts')), scoringPermission: fields.get('scoringPermission'), startsAt: startsAt.toISOString(), endsAt: endsAt.toISOString() });
-      state.online.tournaments = await listMyTournaments();
+      await refreshOnlineOverview();
       await openTournament(tournament.id);
     }
     if (form.dataset.form === 'join-tournament') {
       const fields = new FormData(form);
       const tournament = await joinTournament(fields.get('code'));
-      state.online.tournaments = await listMyTournaments();
+      await refreshOnlineOverview();
       await openTournament(tournament.id);
     }
     if (form.dataset.form === 'add-guest') {
       const fields = new FormData(form);
       await addGuestPlayer(state.online.selected.tournament.id, fields.get('guestName'));
       state.online.selected = await loadTournament(state.online.selected.tournament.id);
+      render();
+    }
+    if (form.dataset.form === 'edit-tournament') {
+      const fields = new FormData(form);
+      const startsAt = new Date(fields.get('startsAt'));
+      const endsAt = new Date(fields.get('endsAt'));
+      if (Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime()) || endsAt <= startsAt) throw new Error('Choose an end time after the start time.');
+      await updateTournamentDetails({ tournamentId: state.online.selected.tournament.id, name: fields.get('name'), venue: fields.get('venue'), startsAt: startsAt.toISOString(), endsAt: endsAt.toISOString() });
+      state.online.selected = await loadTournament(state.online.selected.tournament.id);
+      state.online.roomView = 'main';
+      await refreshOnlineOverview();
+      setNotice('Tournament details saved.');
       render();
     }
   } catch (error) {
