@@ -11,8 +11,8 @@ export const SCORE_FORMAT = Object.freeze({
   tiebreakPoints: 7
 });
 
-// The original quick-session rule used by Offline mode: a complete tennis
-// point sequence awards one set; first to two sets wins the game.
+// Padelé's individual scoring: a complete 0/15/30/40 point sequence wins a
+// set; first to two sets wins the game, with a decider at 1–1.
 export const QUICK_SESSION_FORMAT = Object.freeze({
   mode: 'quick-session',
   bestOfSets: 3,
@@ -20,6 +20,10 @@ export const QUICK_SESSION_FORMAT = Object.freeze({
   tiebreakAt: null,
   tiebreakPoints: null
 });
+
+export function isQuickSession(score) {
+  return score.format.mode === 'quick-session';
+}
 
 const POINT_LABELS = ['0', '15', '30', '40'];
 
@@ -47,7 +51,7 @@ export function scoreFromHistory(history = [], format = SCORE_FORMAT) {
 }
 
 export function isTiebreak(score) {
-  if (score.format.mode === 'quick-session') return false;
+  if (isQuickSession(score)) return false;
   const { gamesA, gamesB } = score.current;
   return gamesA === score.format.tiebreakAt && gamesB === score.format.tiebreakAt;
 }
@@ -65,7 +69,7 @@ export function pointLabel(score, side) {
 }
 
 export function setDisplay(score, side) {
-  if (score.format.mode === 'quick-session') return [];
+  if (isQuickSession(score)) return [];
   return score.sets.map((set) => {
     const games = side === 'a' ? set.a : set.b;
     const other = side === 'a' ? set.b : set.a;
@@ -79,7 +83,7 @@ export function setDisplay(score, side) {
 }
 
 export function currentSetDisplay(score, side) {
-  if (score.format.mode === 'quick-session') return matchSetsWon(score, side);
+  if (isQuickSession(score)) return matchSetsWon(score, side);
   return side === 'a' ? score.current.gamesA : score.current.gamesB;
 }
 
@@ -100,7 +104,7 @@ export function scoreStatus(score) {
   const bPreview = applyPoint(score, 'b', false);
   const aWinsMatch = aPreview.complete && aPreview.winner === 'a';
   const bWinsMatch = bPreview.complete && bPreview.winner === 'b';
-  if (aWinsMatch || bWinsMatch) return `${score.format.mode === 'quick-session' ? 'Game' : 'Match'} point — Team ${aWinsMatch ? 'A' : 'B'}`;
+  if (aWinsMatch || bWinsMatch) return `${isQuickSession(score) ? 'Game' : 'Match'} point — Team ${aWinsMatch ? 'A' : 'B'}`;
   const aWinsSet = aPreview.sets.length > score.sets.length;
   const bWinsSet = bPreview.sets.length > score.sets.length;
   if (aWinsSet || bWinsSet) return `Set point — Team ${aWinsSet ? 'A' : 'B'}`;
@@ -117,7 +121,7 @@ export function applyPoint(input, side, recordHistory = true) {
   const other = side === 'a' ? 'pointsB' : 'pointsA';
   score.current[own] += 1;
 
-  if (score.format.mode === 'quick-session') {
+  if (isQuickSession(score)) {
     if (score.current[own] >= 4 && score.current[own] - score.current[other] >= 2) {
       winQuickSet(score, side);
     }

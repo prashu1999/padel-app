@@ -180,9 +180,8 @@ export async function startRound(tournamentId, matches, waitingPlayerIds) {
 }
 
 export async function recordPoint(match, side) {
-  // Online games deliberately use the same short Padelé format as Offline:
-  // win a set by taking a tennis point sequence, and win the game by taking
-  // two sets (with a third set as the decider at 1–1).
+  // Online uses the same individual Padelé format as Offline: a completed
+  // 0/15/30/40 sequence awards a set; two sets win the game.
   const nextScore = scoreFromHistory([...(match.score_history || []), side], QUICK_SESSION_FORMAT);
   const { data, error } = await client().rpc('record_score_event', {
     p_match_id: match.id,

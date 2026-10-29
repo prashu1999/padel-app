@@ -1,7 +1,7 @@
 import './styles.css';
 import {
   applyPoint, createScore, currentSetDisplay, matchSetsWon, pointLabel,
-  QUICK_SESSION_FORMAT, scoreFromHistory, scoreStatus, setDisplay, undoPoint
+  QUICK_SESSION_FORMAT, isQuickSession, scoreFromHistory, scoreStatus, setDisplay, undoPoint
 } from './scoring.js';
 import { makeRound, pairKey, possibleFreshPairs, recordRound, roundCapacity } from './shuffle.js';
 import {
@@ -184,7 +184,7 @@ function teamNames(session, ids) {
 }
 
 function scoreSets(score, side) {
-  if (score.format.mode === 'quick-session') {
+  if (isQuickSession(score)) {
     return `<span class="sets-line"><b title="Next set">SET ${score.sets.length + 1}</b></span>`;
   }
   const completed = setDisplay(score, side);
@@ -213,17 +213,17 @@ function renderMatchCard(match, session) {
       <p class="score-status ${complete ? 'score-status--complete' : ''}">${escapeHtml(scoreStatus(score))}</p>
       <button class="score-button score-button--b" data-action="offline-point" data-match="${match.id}" data-side="b" ${complete ? 'disabled' : ''}><span>TEAM B</span><b>${pointLabel(score, 'b')}</b><small>+ point</small></button>
     </div>
-    <div class="match-card__footer"><span>${score.format.mode === 'quick-session' ? 'Sets won' : 'Games'}: ${currentSetDisplay(score, 'a')} – ${currentSetDisplay(score, 'b')}</span><button class="text-button text-button--compact" data-action="offline-undo" data-match="${match.id}" ${score.history.length ? '' : 'disabled'}>Undo last point</button></div>
+    <div class="match-card__footer"><span>${isQuickSession(score) ? 'Sets won' : 'Games'}: ${currentSetDisplay(score, 'a')} – ${currentSetDisplay(score, 'b')}</span><button class="text-button text-button--compact" data-action="offline-undo" data-match="${match.id}" ${score.history.length ? '' : 'disabled'}>Undo last point</button></div>
   </article>`;
 }
 
 function renderLeaderboard(session) {
   const stats = playerStats(session);
-  if (!session.history.length) return '';
+  if (!stats.some((stat) => stat.played)) return '';
   return `<section class="leaderboard card"><div class="section-heading"><p class="eyebrow">SESSION FORM</p><h2>Leaderboard</h2></div>
-    <div class="table-wrap"><table><thead><tr><th>Player</th><th>W</th><th>L</th><th>Sets</th><th>Games</th></tr></thead><tbody>
-    ${stats.map((stat) => `<tr><td>${escapeHtml(stat.name)}</td><td>${stat.wins}</td><td>${stat.losses}</td><td>${stat.sets}</td><td>${stat.games}</td></tr>`).join('')}
-    </tbody></table></div></section>`;
+    <div class="table-wrap"><table><thead><tr><th>Player</th><th>P</th><th>W</th><th>L</th></tr></thead><tbody>
+    ${stats.map((stat) => `<tr><td>${escapeHtml(stat.name)}</td><td>${stat.played}</td><td>${stat.wins}</td><td>${stat.losses}</td></tr>`).join('')}
+    </tbody></table></div><p class="leaderboard__note">P = games played · W = games won</p></section>`;
 }
 
 function renderOfflineSession() {
@@ -235,7 +235,7 @@ function renderOfflineSession() {
     <section class="session-intro">
       <p class="eyebrow eyebrow--light">${session.completed ? 'ALL FRESH PAIRS USED' : 'LIVE SHUFFLE'}</p>
       <h1>${session.completed ? 'That’s a wrap.' : 'Play the point.'}</h1>
-      <p>${session.completed ? 'Every possible new teammate combination has been used. Great session.' : 'Quick scoring: each tennis point sequence earns a set; first to two sets wins the game.'}</p>
+      <p>${session.completed ? 'Every possible new teammate combination has been used. Great session.' : 'Individual scoring: win a 0/15/30/40 point sequence to earn a set; first to two sets wins the game.'}</p>
     </section>
     ${session.completed ? `<section class="card finished-card"><span>✓</span><h2>Session finished fairly</h2><p>Padelé will not create a repeated teammate pairing.</p><button class="button button--primary" data-action="new-offline">New session</button></section>` : `
       <section class="assignment card"><div class="section-heading"><p class="eyebrow">WHO PLAYS WHERE</p><h2>Round ${session.roundNumber}</h2></div>
@@ -359,7 +359,7 @@ function renderOnlineTournament() {
 function renderTournamentLeaderboard(tournament, leaderboard, completedMatches, isOrganizer) {
   const latest = completedMatches[0];
   const champion = tournament.status === 'finished' ? leaderboard[0] : null;
-  return `<section class="card past-rounds results-card"><div class="section-heading"><div><p class="eyebrow">LIVE RESULTS</p><h2>${completedMatches.length ? 'Leaderboard' : 'Results will appear here'}</h2></div><span class="list-count">${completedMatches.length}</span></div>${champion?.wins ? `<div class="champion-card"><span>TOURNAMENT CHAMPION</span><b>🏆 ${escapeHtml(champion.name)}</b><small>${champion.wins} wins · ${champion.sets} sets won</small></div>` : ''}${completedMatches.length ? `<div class="table-wrap"><table><thead><tr><th>Player</th><th>W</th><th>L</th><th>Sets</th></tr></thead><tbody>${leaderboard.map((row) => `<tr><td>${escapeHtml(row.name)}</td><td>${row.wins}</td><td>${row.losses}</td><td>${row.sets}</td></tr>`).join('')}</tbody></table></div><p class="results-card__note">${latest ? `Latest result: Court ${latest.court} complete.` : ''}</p>${isOrganizer && latest ? `<button class="text-button" data-action="online-undo" data-match="${latest.id}">Undo latest completed score</button>` : ''}` : '<p>Complete a match to start the live tournament standings.</p>'}</section>`;
+  return `<section class="card past-rounds results-card"><div class="section-heading"><div><p class="eyebrow">LIVE RESULTS</p><h2>${completedMatches.length ? 'Leaderboard' : 'Results will appear here'}</h2></div><span class="list-count">${completedMatches.length}</span></div>${champion?.wins ? `<div class="champion-card"><span>TOURNAMENT CHAMPION</span><b>🏆 ${escapeHtml(champion.name)}</b><small>${champion.wins} wins · ${champion.sets} sets won</small></div>` : ''}${completedMatches.length ? `<div class="table-wrap"><table><thead><tr><th>Player</th><th>P</th><th>W</th><th>L</th></tr></thead><tbody>${leaderboard.map((row) => `<tr><td>${escapeHtml(row.name)}</td><td>${row.played}</td><td>${row.wins}</td><td>${row.losses}</td></tr>`).join('')}</tbody></table></div><p class="results-card__note">P = played. Players waiting on a one-court round remain on the board with their existing totals. ${latest ? `Latest result: Court ${latest.court} complete.` : ''}</p>${isOrganizer && latest ? `<button class="text-button" data-action="online-undo" data-match="${latest.id}">Undo latest completed score</button>` : ''}` : '<p>Complete a match to start the live tournament standings.</p>'}</section>`;
 }
 
 function renderEditTournament(tournament) {

@@ -9,8 +9,7 @@ The offline app is fully usable without an account, network, or Supabase project
 
 ## Rules built in
 
-- **Offline quick sessions:** `0 → 15 → 30 → 40`, deuce and advantage award one set; first to two sets wins the game, so 1–1 has a deciding set.
-- **Online tournaments:** use the exact same quick-session score as Offline: a tennis point sequence wins one set; first to two sets wins the game; 1–1 has a deciding set.
+- **Offline and Online:** a completed 0/15/30/40 individual score sequence awards one set; first to two sets wins the game, so 1–1 has a deciding set.
 - Online hosts set a venue, start time and end time. Their room is hidden from the dashboard two hours after its scheduled end, but its results are retained.
 - Online includes RSVP availability, live court/waiting assignments, host-only score undo, shareable room invitations, a live leaderboard, player results, archive/restore, and host controls for guest removal and room details.
 - A teammate pairing is used once only. Padelé will not create a later round that repeats one; it ends the session once a full fresh-pair round cannot be made.
@@ -84,7 +83,7 @@ Open the public HTTPS deployment in **Safari** on the iPhone, then tap **Share �
 ## Project layout
 
 ```text
-src/scoring.js              Pure shared tennis scoring engine
+src/scoring.js              Pure shared Padelé scoring engine
 src/shuffle.js              Fair pairing and rotation engine
 src/main.js                 Mobile UI and offline/online flows
 src/services/               Auth, tournament and Realtime clients

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyPoint, createScore, isTiebreak, pointLabel, QUICK_SESSION_FORMAT, scoreFromHistory, undoPoint } from './scoring.js';
+import { applyPoint, createScore, isTiebreak, pointLabel, QUICK_SESSION_FORMAT, scoreFromHistory, scoreStatus, undoPoint } from './scoring.js';
 
 function add(score, side, times) {
   let next = score;
@@ -61,7 +61,7 @@ test('rehydrates a score from its canonical point event history', () => {
   assert.equal(pointLabel(score, 'b'), '15');
 });
 
-test('keeps the original offline quick-session rule: first to two sets wins', () => {
+test('uses individual scoring and first to two sets wins', () => {
   let score = createScore(QUICK_SESSION_FORMAT);
   score = add(score, 'a', 4);
   assert.equal(score.complete, false);
@@ -74,7 +74,7 @@ test('keeps the original offline quick-session rule: first to two sets wins', ()
   assert.equal(score.sets.filter((set) => set.a > set.b).length, 2);
 });
 
-test('replays an online event history with the same quick-session rule as Offline', () => {
+test('replays an online event history with the same individual score rule as Offline', () => {
   // Team A wins the opening set, Team B levels it, then A takes the decider.
   const score = scoreFromHistory([
     'a', 'a', 'a', 'a',
